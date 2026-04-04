@@ -12,6 +12,7 @@ Runs on SageMaker (paths injected via SM_CHANNEL_* env vars automatically).
 import argparse
 import os
 import shutil
+import time
 
 import torch
 import torch.nn as nn
@@ -60,6 +61,7 @@ def train_one_epoch(model, optimizer, scaler, loader, criterion, device,
                     epoch, scheduler):
     model.train()
     running_loss, running_top1, running_top5, n = 0.0, 0.0, 0.0, 0
+    t0 = time.time()
 
     for images, labels in loader:
         images, labels = images.to(device), labels.to(device)
@@ -92,7 +94,8 @@ def train_one_epoch(model, optimizer, scaler, loader, criterion, device,
         'learning_rate':  scheduler.get_last_lr()[0],
         'epoch':          epoch,
     })
-    print(f"[Epoch {epoch}] train loss={epoch_loss:.4f}  top1={epoch_top1:.2f}%  top5={epoch_top5:.2f}%")
+    elapsed = time.time() - t0
+    print(f"[Epoch {epoch}] train  loss={epoch_loss:.4f}  top1={epoch_top1:.2f}%  top5={epoch_top5:.2f}%  ({elapsed:.0f}s)")
     return epoch_top1, epoch_loss, epoch_top5
 
 
@@ -100,6 +103,7 @@ def train_one_epoch(model, optimizer, scaler, loader, criterion, device,
 def validate(model, loader, criterion, device, epoch):
     model.eval()
     running_loss, running_top1, running_top5, n = 0.0, 0.0, 0.0, 0
+    t0 = time.time()
 
     for images, labels in loader:
         images, labels = images.to(device), labels.to(device)
@@ -124,7 +128,8 @@ def validate(model, loader, criterion, device, epoch):
         'val/top5_acc': epoch_top5,
         'epoch':        epoch,
     })
-    print(f"[Epoch {epoch}]   val loss={epoch_loss:.4f}  top1={epoch_top1:.2f}%  top5={epoch_top5:.2f}%")
+    elapsed = time.time() - t0
+    print(f"[Epoch {epoch}]   val  loss={epoch_loss:.4f}  top1={epoch_top1:.2f}%  top5={epoch_top5:.2f}%  ({elapsed:.0f}s)")
     return epoch_top1, epoch_loss, epoch_top5
 
 
@@ -142,7 +147,7 @@ def parse_args():
     parser.add_argument('--lr',            type=float, default=0.5)
     parser.add_argument('--batch-size',    type=int,   default=64)
     parser.add_argument('--dropout',       type=float, default=0.4)
-    parser.add_argument('--num-classes',   type=int,   default=7000)
+    parser.add_argument('--num-classes',   type=int,   default=7001)
     parser.add_argument('--baseline-ckpt', type=str,   default=None,
                         help='Path to best baseline checkpoint for backbone init')
 
@@ -155,13 +160,13 @@ def parse_args():
                         default=os.environ.get('SM_MODEL_DIR',     'output/model'))
     parser.add_argument('--checkpoint-dir', type=str,   default='/opt/ml/checkpoints')
 
-    return parser.parse_args()
+    args, _ = parser.parse_known_args()  # ignore extra args SageMaker appends (channel names)
+    return args
 
 
 def main():
     args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Device: {device}  |  Head: {args.head_config}  |  Stage: {args.stage}")
 
     # ── Model ────────────────────────────────────────────────────────────────
     head_cfg = HEAD_CONFIGS[args.head_config].copy()
@@ -171,10 +176,40 @@ def main():
 
     if args.baseline_ckpt:
         load_backbone_only(args.baseline_ckpt, model, device)
+        # Verify backbone loaded — sample the first conv weight mean
+        # A freshly-initialized LazyConv2d has mean ≈ 0; a trained backbone will differ
+        sample_w = next(p for n, p in model.named_parameters() if n == 'net.0.0.weight')
+        print(f"Backbone weight check — net.0.0.weight mean: {sample_w.data.mean():.6f}")
+    else:
+        print("No baseline checkpoint provided — backbone randomly initialized")
 
     freeze_backbone(model)
+    total     = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Trainable parameters: {trainable:,}")
+    frozen    = total - trainable
+
+    hidden = head_cfg['hidden_dims']
+    arch   = f"512 → {' → '.join(str(d) for d in hidden)} → {args.num_classes}" if hidden \
+             else f"512 → {args.num_classes}"
+
+    print()
+    print("=" * 50)
+    print("  Training Config")
+    print("=" * 50)
+    print(f"  Head config:  {args.head_config}  ({arch})")
+    print(f"  Stage:        {args.stage}")
+    print(f"  Epochs:       {args.epochs}")
+    print(f"  LR:           {args.lr}")
+    print(f"  Batch size:   {args.batch_size}")
+    print(f"  Dropout:      {head_cfg['dropout']}")
+    print(f"  Device:       {device}")
+    if torch.cuda.is_available():
+        print(f"  GPU:          {torch.cuda.get_device_name(0)}")
+    print(f"  Trainable:    {trainable:,} params")
+    print(f"  Frozen:       {frozen:,} params")
+    print(f"  Checkpoint:   {args.baseline_ckpt or 'none'}")
+    print("=" * 50)
+    print()
 
     # ── Data ─────────────────────────────────────────────────────────────────
     train_tf, val_tf = get_transforms()
@@ -183,13 +218,19 @@ def main():
 
     if args.stage == 1:
         train_dataset = random_subset(train_dataset, fraction=0.20)
-        print(f"Stage 1: using 20% subset — {len(train_dataset)} images")
 
     nw = min(os.cpu_count() - 1, 8)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
                               shuffle=True, num_workers=nw, pin_memory=True)
     val_loader   = DataLoader(val_dataset,   batch_size=args.batch_size,
                               shuffle=False, num_workers=nw, pin_memory=True)
+
+    print(f"Train dataset: {len(train_dataset):,} images" +
+          (" (20% subset)" if args.stage == 1 else " (full)"))
+    print(f"Val dataset:   {len(val_dataset):,} images")
+    print(f"Batches/epoch: {len(train_loader)}")
+    print(f"num_workers:   {nw}")
+    print()
 
     # ── Training setup ───────────────────────────────────────────────────────
     criterion = nn.CrossEntropyLoss()
