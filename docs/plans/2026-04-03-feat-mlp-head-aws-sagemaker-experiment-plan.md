@@ -923,13 +923,13 @@ ResNetFaceClassification/
 - [x] `load_backbone_only()` loads backbone weights with `strict=False`; logs (does not assert) unexpected keys
 
 ### Training Script
-- [ ] `src/train.py` uses `torch.cuda.amp.GradScaler` + `autocast` — AMP preserved from notebook
-- [ ] `src/train.py` runs locally with `--train-dir` and `--val-dir` pointing to local paths
-- [ ] `src/train.py` runs on SageMaker using `SM_CHANNEL_TRAIN` / `SM_CHANNEL_VAL` env vars
-- [ ] Single training loop: backbone frozen throughout, half-epoch warmup → CosineAnnealingLR, head params only
-- [ ] `num_workers` set to `min(os.cpu_count() - 1, 8)` — not hardcoded
-- [ ] Checkpoints include `scaler_state` — spot resume restores all four states (model, optimizer, scheduler, scaler)
-- [ ] Final model saved to `--model-dir` (defaults to `/opt/ml/model`)
+- [x] `src/train.py` uses `torch.cuda.amp.GradScaler` + `autocast` — AMP preserved from notebook
+- [x] `src/train.py` runs locally with `--train-dir` and `--val-dir` pointing to local paths
+- [x] `src/train.py` runs on SageMaker using `SM_CHANNEL_TRAIN` / `SM_CHANNEL_VAL` env vars
+- [x] Single training loop: backbone frozen throughout, half-epoch warmup → CosineAnnealingLR, head params only
+- [x] `num_workers` set to `min(os.cpu_count() - 1, 8)` — not hardcoded
+- [x] Checkpoints include `scaler_state` — spot resume restores all four states (model, optimizer, scheduler, scaler)
+- [x] Final model saved to `--model-dir` (defaults to `/opt/ml/model`)
 
 ### AWS Infrastructure
 - [ ] `docker/requirements.txt` contains only `wandb>=0.17.0` (no scikit-learn)
@@ -957,14 +957,44 @@ ResNetFaceClassification/
 
 ## Dependencies & Prerequisites
 
-- AWS account with SageMaker execution role (`SageMakerExecutionRole`) that has:
-  - `AmazonSageMakerFullAccess`
-  - `AmazonS3FullAccess` (or scoped to the project bucket)
-  - ECR push/pull permissions
-- Docker installed locally for building the image
-- AWS CLI configured (`aws configure`) with credentials that can push to ECR
-- `sagemaker` Python SDK installed locally: `pip install sagemaker boto3`
-- Best baseline checkpoint available locally or on S3
+- [x] AWS account with SageMaker execution role (`Model_training`) that has:
+  - [x] `AmazonSageMakerFullAccess`
+  - [x] `AmazonS3FullAccess`
+  - [x] `AmazonEC2ContainerRegistryFullAccess`
+- [x] Docker installed locally for building the image (v28.5.1)
+- [x] AWS CLI configured (`aws configure`) — user `ML_developer`, region `us-east-1`
+- [x] `sagemaker`, `boto3`, `wandb` installed in `.venv` (Python 3.13.9, miniconda3)
+- [x] Best baseline checkpoint available locally and on S3
+  - Local: `checkpoints/checkpoint.pth` (113MB, epoch 98, val_acc 71.82%)
+  - S3: `s3://resnet-face-classification-839000214843/checkpoints/checkpoint.pth`
+  - Source: W&B run `kyungin/hw2p2-ablations/kuib2alf`
+
+## Provisioned AWS Resources
+
+| Resource | Value |
+|----------|-------|
+| AWS Account ID | `839000214843` |
+| Region | `us-east-1` |
+| IAM CLI user | `arn:aws:iam::839000214843:user/ML_developer` |
+| SageMaker execution role | `arn:aws:iam::839000214843:role/Model_training` |
+| S3 bucket | `s3://resnet-face-classification-839000214843` |
+
+**S3 layout (as uploaded):**
+
+```
+s3://resnet-face-classification-839000214843/
+├── data/
+│   ├── train/     ← 7001 classes, ~1.4 GB
+│   └── val/       ← 7001 classes (dev split), ~361 MB
+└── checkpoints/
+    └── checkpoint.pth   ← baseline, epoch 98, val_acc 71.82%
+```
+
+**Activate venv before running any scripts:**
+
+```bash
+source .venv/bin/activate
+```
 
 ---
 
