@@ -6,12 +6,13 @@ WANDB_API_KEY must be set in the local environment — it is injected into
 the training container as an env var. Never hardcode it.
 
 Usage (Stage 1 — elimination, 20% data):
-    WANDB_API_KEY=<key> python scripts/launch_sagemaker_job.py \
-        --head-config B --stage 1 --epochs 8 \
-        --instance-type ml.g4dn.xlarge --use-spot
+    python scripts/launch_sagemaker_job.py \
+--head-config A --stage 1 --epochs 8 --use-spot \
+--bucket resnet-face-classification-839000214843 --prefix data \
+--baseline-ckpt-s3 s3://resnet-face-classification-839000214843/checkpoints/checkpoint.pth
 
 Usage (Stage 2 — selection, full data):
-    WANDB_API_KEY=<key> python scripts/launch_sagemaker_job.py \
+    python scripts/launch_sagemaker_job.py \
         --head-config B --stage 2 --epochs 25 \
         --instance-type ml.g4dn.xlarge --use-spot \
         --baseline-ckpt-s3 s3://<bucket>/resnet-face/baseline/best.pt
@@ -30,14 +31,14 @@ from sagemaker.train.configs import (
     InputData, Compute, CheckpointConfig,
     StoppingCondition, OutputDataConfig,
 )
+from sagemaker.core.helper.session_helper import Session, get_execution_role
 
 AWS_REGION     = "us-east-1"
 AWS_ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 ECR_REPO       = "resnet-face-training"
 IMAGE_TAG      = "latest"
 IMAGE_URI      = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com/{ECR_REPO}:{IMAGE_TAG}"
-SAGEMAKER_ROLE = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/SageMakerExecutionRole"
-
+SAGEMAKER_ROLE = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/Model_training"
 
 def parse_args():
     p = argparse.ArgumentParser(description="Launch a SageMaker training job")
@@ -62,7 +63,7 @@ def parse_args():
 
 def main():
     args    = parse_args()
-    session = sagemaker.Session()
+    session = Session(boto_session=boto3.Session(region_name=AWS_REGION))
     bucket  = args.bucket or session.default_bucket()
     prefix  = args.prefix
 
@@ -81,9 +82,6 @@ def main():
         "batch-size":  args.batch_size,
         # backbone frozen throughout — no freeze-epochs needed
     }
-    if args.baseline_ckpt_s3:
-        hyperparams["baseline-ckpt"] = args.baseline_ckpt_s3
-
     trainer = ModelTrainer(
         training_image=IMAGE_URI,
         role=SAGEMAKER_ROLE,
@@ -108,22 +106,32 @@ def main():
         environment={
             # Injected from local shell — never hardcoded in source
             "WANDB_API_KEY": os.environ["WANDB_API_KEY"],
+            "PYTHONUNBUFFERED": "1"
         },
         sagemaker_session=session,
         base_job_name="resnet-face",
     )
 
-    train_input = InputData(channel_name="train", data_source=f"s3://{bucket}/{prefix}/data/train")
-    val_input   = InputData(channel_name="val",   data_source=f"s3://{bucket}/{prefix}/data/val")
+    train_input = InputData(channel_name="train", data_source=f"s3://{bucket}/{prefix}/train")
+    val_input   = InputData(channel_name="val",   data_source=f"s3://{bucket}/{prefix}/val")
+
+    input_channels = [train_input, val_input]
+    if args.baseline_ckpt_s3:
+        # Pass checkpoint as a channel — SageMaker downloads it to
+        # /opt/ml/input/data/checkpoint/ before train.py starts.
+        # train.py reads SM_CHANNEL_CHECKPOINT to get the local path.
+        input_channels.append(
+            InputData(channel_name="checkpoint", data_source=args.baseline_ckpt_s3)
+        )
 
     print(f"Launching: {job_name}")
     print(f"  Head:     {args.head_config}")
     print(f"  Stage:    {args.stage}  ({args.epochs} epochs)")
     print(f"  Instance: {args.instance_type}  Spot: {args.use_spot}")
-    print(f"  Checkpoint S3: {checkpoint_s3}")
+    print(f"  Baseline ckpt: {args.baseline_ckpt_s3 or 'none'}")
 
     trainer.train(
-        input_data_config=[train_input, val_input],
+        input_data_config=input_channels,
         wait=True,
         logs=True,
     )

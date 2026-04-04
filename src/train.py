@@ -148,8 +148,9 @@ def parse_args():
     parser.add_argument('--batch-size',    type=int,   default=64)
     parser.add_argument('--dropout',       type=float, default=0.4)
     parser.add_argument('--num-classes',   type=int,   default=7001)
-    parser.add_argument('--baseline-ckpt', type=str,   default=None,
-                        help='Path to best baseline checkpoint for backbone init')
+    parser.add_argument('--baseline-ckpt', type=str,
+                        default=os.environ.get('SM_CHANNEL_CHECKPOINT', None),
+                        help='Local path to baseline checkpoint. On SageMaker, set via checkpoint input channel.')
 
     # Paths — SM env vars used as defaults so the same script runs locally + on SageMaker
     parser.add_argument('--train-dir',      type=str,
@@ -175,7 +176,15 @@ def main():
     model = ResNet18(head=head, num_classes=args.num_classes).to(device)
 
     if args.baseline_ckpt:
-        load_backbone_only(args.baseline_ckpt, model, device)
+        ckpt_path = args.baseline_ckpt
+        # SM_CHANNEL_CHECKPOINT points to a directory — find the .pth file inside it
+        if os.path.isdir(ckpt_path):
+            pth_files = [f for f in os.listdir(ckpt_path) if f.endswith('.pth')]
+            if not pth_files:
+                raise FileNotFoundError(f"No .pth file found in checkpoint dir: {ckpt_path}")
+            ckpt_path = os.path.join(ckpt_path, pth_files[0])
+            print(f"Checkpoint dir provided — using: {ckpt_path}")
+        load_backbone_only(ckpt_path, model, device)
         # Verify backbone loaded — sample the first conv weight mean
         # A freshly-initialized LazyConv2d has mean ≈ 0; a trained backbone will differ
         sample_w = next(p for n, p in model.named_parameters() if n == 'net.0.0.weight')
