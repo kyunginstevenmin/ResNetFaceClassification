@@ -20,11 +20,16 @@ Usage (Stage 2 — selection, full data):
 import argparse
 import os
 import time
+from dotenv import load_dotenv
+load_dotenv()  # Load env vars from .env file if present
 
 import boto3
 import sagemaker
-from sagemaker.estimator import Estimator
-from sagemaker.inputs import TrainingInput
+from sagemaker.train.model_trainer import ModelTrainer
+from sagemaker.train.configs import (
+    InputData, Compute, CheckpointConfig,
+    StoppingCondition, OutputDataConfig,
+)
 
 AWS_REGION     = "us-east-1"
 AWS_ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
@@ -48,14 +53,18 @@ def parse_args():
                    help="Use spot instances (60-90%% cheaper, requires checkpoint_s3_uri)")
     p.add_argument("--baseline-ckpt-s3", default=None,
                    help="S3 URI of best baseline checkpoint for backbone init")
+    p.add_argument("--bucket",           default=None,
+                   help="S3 bucket name (defaults to SageMaker default bucket)")
+    p.add_argument("--prefix",           default="resnet-face",
+                   help="S3 key prefix scoping this project within the bucket")
     return p.parse_args()
 
 
 def main():
     args    = parse_args()
     session = sagemaker.Session()
-    bucket  = session.default_bucket()
-    prefix  = "resnet-face"
+    bucket  = args.bucket or session.default_bucket()
+    prefix  = args.prefix
 
     job_name      = f"resnet-head-{args.head_config.lower()}-s{args.stage}-{int(time.time())}"
     checkpoint_s3 = f"s3://{bucket}/{prefix}/checkpoints/{job_name}"
@@ -75,18 +84,26 @@ def main():
     if args.baseline_ckpt_s3:
         hyperparams["baseline-ckpt"] = args.baseline_ckpt_s3
 
-    estimator = Estimator(
-        image_uri=IMAGE_URI,
+    trainer = ModelTrainer(
+        training_image=IMAGE_URI,
         role=SAGEMAKER_ROLE,
-        instance_type=args.instance_type,
-        instance_count=1,
-        volume_size=100,          # GB — holds dataset + checkpoints on instance
-        max_run=max_run,
-        use_spot_instances=args.use_spot,
-        max_wait=max_wait if args.use_spot else None,
-        checkpoint_s3_uri=checkpoint_s3 if args.use_spot else None,
-        checkpoint_local_path="/opt/ml/checkpoints",
-        output_path=f"s3://{bucket}/{prefix}/output",
+        compute=Compute(
+            instance_type=args.instance_type,
+            instance_count=1,
+            volume_size_in_gb=100,               # holds dataset + checkpoints on instance
+            enable_managed_spot_training=args.use_spot or None,
+        ),
+        stopping_condition=StoppingCondition(
+            max_runtime_in_seconds=max_run,
+            max_wait_time_in_seconds=max_wait if args.use_spot else None,
+        ),
+        checkpoint_config=CheckpointConfig(
+            s3_uri=checkpoint_s3 if args.use_spot else None,
+            local_path="/opt/ml/checkpoints",
+        ),
+        output_data_config=OutputDataConfig(
+            s3_output_path=f"s3://{bucket}/{prefix}/output",
+        ),
         hyperparameters=hyperparams,
         environment={
             # Injected from local shell — never hardcoded in source
@@ -96,8 +113,8 @@ def main():
         base_job_name="resnet-face",
     )
 
-    train_input = TrainingInput(f"s3://{bucket}/{prefix}/data/train", input_mode="File")
-    val_input   = TrainingInput(f"s3://{bucket}/{prefix}/data/val",   input_mode="File")
+    train_input = InputData(channel_name="train", data_source=f"s3://{bucket}/{prefix}/data/train")
+    val_input   = InputData(channel_name="val",   data_source=f"s3://{bucket}/{prefix}/data/val")
 
     print(f"Launching: {job_name}")
     print(f"  Head:     {args.head_config}")
@@ -105,13 +122,12 @@ def main():
     print(f"  Instance: {args.instance_type}  Spot: {args.use_spot}")
     print(f"  Checkpoint S3: {checkpoint_s3}")
 
-    estimator.fit(
-        inputs={"train": train_input, "val": val_input},
-        job_name=job_name,
+    trainer.train(
+        input_data_config=[train_input, val_input],
         wait=True,
-        logs="All",
+        logs=True,
     )
-    print(f"\nDone. Artifacts: {estimator.model_data}")
+    print(f"\nDone. Job: {trainer._latest_training_job.training_job_name}")
 
 
 if __name__ == "__main__":
