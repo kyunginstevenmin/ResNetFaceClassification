@@ -27,3 +27,6 @@ memory/
 
 # Scratch / exploratory notebooks
 notebooks/scratch/
+
+# Notebook plot exports
+notebooks/*.png
