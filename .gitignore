@@ -1,0 +1,26 @@
+data/
+docs/
+.env
+wandb/
+
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Artifacts (large files / generated outputs)
+checkpoints/
+model/
+output/
+
+# Claude Code memory
+memory/
+
+# Dataset downloads
+*.zip.download/
+
+# Editor
+*.code-workspace
