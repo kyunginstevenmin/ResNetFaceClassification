@@ -41,8 +41,7 @@ class Residual(nn.Module):
 HEAD_CONFIGS = {
     'A': {'hidden_dims': [],           'dropout': 0.4},  # baseline: 512 -> 7000
     'B': {'hidden_dims': [1024],       'dropout': 0.4},  # wider:    512 -> 1024 -> 7000
-    'C': {'hidden_dims': [512],        'dropout': 0.4},  # same:     512 -> 512  -> 7000
-    'D': {'hidden_dims': [1024, 512],  'dropout': 0.4},  # two-layer:512 -> 1024 -> 512 -> 7000
+    'C': {'hidden_dims': [1024, 512],  'dropout': 0.4},  # two-layer:512 -> 1024 -> 512 -> 7000
 }
 
 
@@ -87,7 +86,7 @@ class ResNet(nn.Module):
                 blk.append(Residual(num_channels))
         return nn.Sequential(*blk)
 
-    def __init__(self, arch, lr=0.1, num_classes=7000, head=None, num_features=512):
+    def __init__(self, arch, lr=0.1, num_classes=7001, head=None, num_features=512):
         super().__init__()
         self.net = nn.Sequential(self.b1())
         for i, b in enumerate(arch):
@@ -106,7 +105,7 @@ class ResNet(nn.Module):
 
 
 class ResNet18(ResNet):
-    def __init__(self, lr=0.1, num_classes=7000, head=None):
+    def __init__(self, lr=0.1, num_classes=7001, head=None):
         super().__init__(((2, 64), (2, 128), (2, 256), (2, 512)),
                          head=head, num_classes=num_classes)
 

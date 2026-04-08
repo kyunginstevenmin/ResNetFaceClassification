@@ -1,13 +1,17 @@
 """
-train.py — SageMaker-compatible training script for the MLP Head experiment.
+train_head.py — SageMaker-compatible training script for the MLP Head using pre-extracted features.
 
 Runs locally:
-    python src/train.py --train-dir data/train --val-dir data/dev \
-        --head-config B --stage 1 --epochs 8 \
-        --baseline-ckpt checkpoint.pth
-        --checkpoint-dir output/checkpoints
+    python src/train_head.py \
+        --train-dir data/features/train_aug5.pt \
+        --val-dir data/features/val.pt \
+        --head-config B --stage 2 --epochs 8 \
+        --baseline-ckpt checkpoints/head_B/best.pt \
+        --model-dir output/head_B_stage2 \
+        --checkpoint-dir checkpoints/head_B_stage2 
 
-Runs on SageMaker (paths injected via SM_CHANNEL_* env vars automatically).
+Runs on SageMaker (SM_CHANNEL_TRAIN / SM_CHANNEL_VAL may point to directories
+containing a single .pt file, which will be resolved automatically).
 """
 
 import argparse
@@ -17,34 +21,15 @@ import time
 
 import torch
 import torch.nn as nn
-import torchvision.transforms as T
 from torch.utils.data import DataLoader, TensorDataset, random_split
-from torchvision.datasets import ImageFolder
 
 import wandb
 
-from model import (HEAD_CONFIGS, MLPHead, ResNet18,
-                   freeze_backbone, load_backbone_only, topk_accuracy)
+from model import (HEAD_CONFIGS, MLPHead, topk_accuracy)
 
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
-
-def get_transforms():
-    mean = [0.4289, 0.3656, 0.3335]
-    std  = [0.2511, 0.2274, 0.2122]
-
-    train_tf = T.Compose([
-        T.RandomHorizontalFlip(),
-        T.RandomAffine(degrees=10, scale=(0.7, 1.3), shear=10),
-        T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.2),
-        T.RandomGrayscale(),
-        T.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5.0)),
-        T.ToTensor(),
-    ])
-    val_tf = T.Compose([T.ToTensor()])
-    return train_tf, val_tf
-
 
 def random_subset(dataset, fraction=0.20, seed=42):
     n = int(len(dataset) * fraction)
@@ -53,40 +38,12 @@ def random_subset(dataset, fraction=0.20, seed=42):
                              generator=torch.Generator().manual_seed(seed))
     return subset
 
-
-def extract_features(backbone, dataset, device, num_copies, batch_size, num_workers):
-    """Pre-extract 512-d backbone features N times with augmentation.
-
-    Each pass through the dataset applies different random augmentations,
-    producing num_copies * len(dataset) total samples in the returned TensorDataset.
-    Backbone must already be frozen and in eval mode before calling.
-    """
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
-                        num_workers=num_workers, pin_memory=True)
-    all_feats, all_labels = [], []
-    backbone.eval()
-    with torch.inference_mode():
-        for copy_idx in range(num_copies):
-            print(f"  Extracting features (copy {copy_idx + 1}/{num_copies})...", flush=True)
-            for images, labels in loader:
-                with torch.cuda.amp.autocast():
-                    feats = backbone(images.to(device))
-                all_feats.append(feats.float().cpu())
-                all_labels.append(labels)
-    features = torch.cat(all_feats)   # (num_copies * dataset_size, 512)
-    labels   = torch.cat(all_labels)  # (num_copies * dataset_size,)
-    print(f"  Done: {len(features):,} samples  "
-          f"({len(dataset):,} images × {num_copies} copies,  "
-          f"{features.nbytes / 1e9:.2f} GB in memory)", flush=True)
-    return TensorDataset(features, labels)
-
-
 # ---------------------------------------------------------------------------
 # Training + validation
 # ---------------------------------------------------------------------------
 
 def train_one_epoch(model, optimizer, scaler, loader, criterion, device,
-                    epoch, scheduler, use_features=False):
+                    epoch, scheduler):
     model.train()
     running_loss, running_top1, running_top5, n = 0.0, 0.0, 0.0, 0
     t0 = time.time()
@@ -96,7 +53,7 @@ def train_one_epoch(model, optimizer, scaler, loader, criterion, device,
         optimizer.zero_grad()
 
         with torch.cuda.amp.autocast():
-            logits = model.head(images) if use_features else model(images)
+            logits = model(images)
             loss = criterion(logits, labels)
 
         top1, top5 = topk_accuracy(logits, labels, topk=(1, 5))
@@ -128,7 +85,7 @@ def train_one_epoch(model, optimizer, scaler, loader, criterion, device,
 
 
 @torch.no_grad()
-def validate(model, loader, criterion, device, epoch, use_features=False):
+def validate(model, loader, criterion, device, epoch):
     model.eval()
     running_loss, running_top1, running_top5, n = 0.0, 0.0, 0.0, 0
     t0 = time.time()
@@ -136,7 +93,7 @@ def validate(model, loader, criterion, device, epoch, use_features=False):
     for images, labels in loader:
         images, labels = images.to(device), labels.to(device)
         with torch.inference_mode():
-            logits = model.head(images) if use_features else model(images)
+            logits = model(images)
             loss = criterion(logits, labels)
 
         top1, top5 = topk_accuracy(logits, labels, topk=(1, 5))
@@ -175,8 +132,6 @@ def parse_args():
     parser.add_argument('--lr',            type=float, default=0.5)
     parser.add_argument('--batch-size',    type=int,   default=64)
     parser.add_argument('--dropout',       type=float, default=0.4)
-    parser.add_argument('--num-aug-copies', type=int,  default=0,
-                        help='Pre-extract backbone features N times with augmentation. 0 disables.')
     parser.add_argument('--num-classes',   type=int,   default=7001)
     parser.add_argument('--baseline-ckpt', type=str,
                         default=os.environ.get('SM_CHANNEL_CHECKPOINT', None),
@@ -198,14 +153,11 @@ def parse_args():
 def main():
     args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # debugging statements:
-    print(os.environ.get('SM_CHANNEL_CHECKPOINT', None), flush=True)
-    print(args.baseline_ckpt, flush=True)
     # ── Model ────────────────────────────────────────────────────────────────
     head_cfg = HEAD_CONFIGS[args.head_config].copy()
     head_cfg['dropout'] = args.dropout  # allow CLI override
-    head = MLPHead(512, num_classes=args.num_classes, **head_cfg)
-    model = ResNet18(head=head, num_classes=args.num_classes).to(device)
+    model = MLPHead(512, num_classes=args.num_classes, **head_cfg).to(device)
+    
 
     if args.baseline_ckpt:
         ckpt_path = args.baseline_ckpt
@@ -217,33 +169,20 @@ def main():
             ckpt_path = os.path.join(ckpt_path, pth_files[0])
             print(f"Checkpoint dir provided — using: {ckpt_path}")
         
-        if args.stage == 2:
-            ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
-            state = ckpt['model_state'] if 'model_state' in ckpt else ckpt
-            model.load_state_dict(state)
-            print("Stage 2 — loaded full model (backbone + head) from Stage 1 checkpoint")
-        else:
-            load_backbone_only(ckpt_path, model, device)
-        # Verify backbone loaded — sample the first conv weight mean
-        # A freshly-initialized LazyConv2d has mean ≈ 0; a trained backbone will differ
-        sample_w = next(p for n, p in model.named_parameters() if n == 'net.0.0.weight')
-        print(f"Backbone weight check — net.0.0.weight mean: {sample_w.data.mean():.6f}")
-    
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
+        state = ckpt['model_state'] if 'model_state' in ckpt else ckpt
+        new_state = {k.replace('_orig_mod.', ''): v for k, v in state.items()}
+        model.load_state_dict(new_state)
+
     else:
-        print("No baseline checkpoint provided — backbone randomly initialized")
+        print("No baseline checkpoint provided — weights randomly initialized")
 
     # Initialize lazy layers — batch size 2 required because BatchNorm1d errors on batch size 1
-    _ = model(torch.zeros(2, 3, 224, 224, device=device))
-    freeze_backbone(model)
+    _ = model(torch.zeros(2, 512, device=device))
+    
     if torch.cuda.is_available():
-        if args.num_aug_copies > 0:
-            model.head = torch.compile(model.head)  # backbone not called during training; compile head only
-        else:
-            model = torch.compile(model)  # fuses kernels; first batch triggers compilation (~30-60s)
-    total     = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    frozen    = total - trainable
-
+        model = torch.compile(model)  # fuses kernels; first batch triggers compilation (~30-60s)
+    
     hidden = head_cfg['hidden_dims']
     arch   = f"512 → {' → '.join(str(d) for d in hidden)} → {args.num_classes}" if hidden \
              else f"512 → {args.num_classes}"
@@ -261,62 +200,49 @@ def main():
     print(f"  Device:       {device}")
     if torch.cuda.is_available():
         print(f"  GPU:          {torch.cuda.get_device_name(0)}")
-    print(f"  Trainable:    {trainable:,} params")
-    print(f"  Frozen:       {frozen:,} params")
     print(f"  Checkpoint:   {args.baseline_ckpt or 'none'}")
-    print(f"  Aug copies:   {args.num_aug_copies if args.num_aug_copies > 0 else 'disabled (full pipeline)'}")
     print("=" * 50)
     print()
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    train_tf, val_tf = get_transforms()
-    train_dataset = ImageFolder(args.train_dir, transform=train_tf)
-    val_dataset   = ImageFolder(args.val_dir,   transform=val_tf)
+    train_file_path, val_file_path = args.train_dir, args.val_dir # if dirs, will be resolved to .pth files in the dirs
+    
+    if os.path.isdir(args.train_dir):
+        pth_files = [f for f in os.listdir(args.train_dir) if f.endswith('.pth') or f.endswith('.pt')]
+        if not pth_files:
+            raise FileNotFoundError(f"No .pt file found in train dir: {args.train_dir}")
+        train_file_path = os.path.join(args.train_dir, pth_files[0])
+        print(f"training file provided — using: {train_file_path}")
+    
+    if os.path.isdir(args.val_dir):
+        pth_files = [f for f in os.listdir(args.val_dir) if f.endswith('.pth') or f.endswith('.pt')]
+        if not pth_files:
+            raise FileNotFoundError(f"No .pt file found in val dir: {args.val_dir}")
+        val_file_path = os.path.join(args.val_dir, pth_files[0])
+        print(f"validation file provided — using: {val_file_path}")
 
-    # debugging:                       
-    
-    print(f"  train_dir: {args.train_dir}")
-    print(f"  contents:  {os.listdir(args.train_dir)[:20]}")
-    
-    actual_classes = len(train_dataset.classes)              
-    print(f"Actual classes in dataset: {actual_classes}")
-    for c in train_dataset.classes:                                                       
-        if not (c.startswith('n00')):                                  
-            print(f"  Suspicious class: {repr(c)}")
-                  
-    assert actual_classes == args.num_classes, f"Mismatch: dataset has {actual_classes} classes, model expects {args.num_classes}"
-    print()
+    train_features = torch.load(train_file_path, map_location='cpu')
+    val_features   = torch.load(val_file_path, map_location='cpu')
+
+    train_dataset = TensorDataset(train_features['features'].float(), train_features['labels'])
+    val_dataset   = TensorDataset(val_features['features'].float(),   val_features['labels'])
 
     if args.stage == 1:
         train_dataset = random_subset(train_dataset, fraction=0.20)
 
     nw = min(os.cpu_count() - 1, 8)
-    use_features = args.num_aug_copies > 0
-    if use_features:
-        print(f"Pre-extracting features ({args.num_aug_copies} augmented copies)...")
-        train_dataset = extract_features(model.net, train_dataset, device,
-                                         args.num_aug_copies, args.batch_size, nw)
-        val_dataset   = extract_features(model.net, val_dataset, device,
-                                         1, args.batch_size, nw)
-        # Features are already in memory — no workers or pin_memory needed
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
-                                  shuffle=True, num_workers=0)
-        val_loader   = DataLoader(val_dataset,   batch_size=args.batch_size,
-                                  shuffle=False, num_workers=0)
-    else:
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
-                                  shuffle=True, num_workers=nw, pin_memory=True,
-                                  persistent_workers=True, prefetch_factor=4)
-        val_loader   = DataLoader(val_dataset,   batch_size=args.batch_size,
-                                  shuffle=False, num_workers=nw, pin_memory=True,
-                                  persistent_workers=True, prefetch_factor=4)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
+                                shuffle=True, num_workers=nw, pin_memory=True,
+                                persistent_workers=True, prefetch_factor=4)
+    val_loader   = DataLoader(val_dataset,   batch_size=args.batch_size,
+                                shuffle=False, num_workers=nw, pin_memory=True,
+                                persistent_workers=True, prefetch_factor=4)
 
     print(f"Train dataset: {len(train_dataset):,} samples" +
-          (" (20% subset)" if args.stage == 1 and not use_features else "") +
-          (f" ({len(train_dataset) // args.num_aug_copies:,} images × {args.num_aug_copies} copies)" if use_features else ""))
+          (" (20% subset)" if args.stage == 1 else ""))
     print(f"Val dataset:   {len(val_dataset):,} samples")
     print(f"Batches/epoch: {len(train_loader)}")
-    print(f"num_workers:   {0 if use_features else nw}")
+    print(f"num_workers:   {nw}")
     
 
     # ── Training setup ───────────────────────────────────────────────────────
@@ -324,7 +250,7 @@ def main():
     scaler    = torch.cuda.amp.GradScaler()
 
     optimizer = torch.optim.SGD(
-        model.head.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4
+        model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4
     )
 
     warmup_steps  = len(train_loader) // 2
@@ -344,7 +270,7 @@ def main():
     # ── WandB ────────────────────────────────────────────────────────────────
     wandb.init(
         project='hw2p2-ablations',
-        name=f'head-{args.head_config}-stage{args.stage}',
+        name=f'head-MLP-{args.head_config}-stage{args.stage}',
         config={
             'head_config':  args.head_config,
             'hidden_dims':  head_cfg['hidden_dims'],
@@ -378,9 +304,9 @@ def main():
     # ── Epoch loop ───────────────────────────────────────────────────────────
     for epoch in range(start_epoch, args.epochs):
         train_one_epoch(model, optimizer, scaler, train_loader, criterion,
-                        device, epoch, scheduler, use_features=use_features)
+                        device, epoch, scheduler)
         val_top1, val_loss, val_top5 = validate(model, val_loader, criterion,
-                                                 device, epoch, use_features=use_features)
+                                                 device, epoch)
 
         is_best = val_top1 > best_val_acc
         best_val_acc = max(val_top1, best_val_acc)
