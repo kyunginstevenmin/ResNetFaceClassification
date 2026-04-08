@@ -536,14 +536,15 @@ Local machine                    ECR
 S3 holds three things for this project:
 
 ```
-S3 Bucket: resnet-face/
+S3 Bucket: s3://resnet-face-classification-839000214843/
 ├── data/
-│   ├── train/     ← 140k training images (uploaded once)
-│   └── val/       ← validation images
+│   ├── train/     ← 7001 classes, ~1.4 GB (uploaded)
+│   └── val/       ← 7001 classes, ~361 MB (uploaded)
 ├── checkpoints/
-│   └── job-name/  ← epoch checkpoints (synced during training for spot resume)
+│   ├── checkpoint.pth        ← baseline, epoch 98, val_acc 71.82%
+│   └── <job-name>/           ← epoch checkpoints (synced during training for spot resume)
 └── output/
-    └── job-name/  ← best.pt (uploaded by SageMaker when job completes)
+    └── <job-name>/           ← best.pt (uploaded by SageMaker when job completes)
 ```
 
 **SageMaker Training Job**
@@ -767,7 +768,7 @@ AWS_ACCOUNT_ID = boto3.client("sts").get_caller_identity()["Account"]
 ECR_REPO       = "resnet-face-training"
 IMAGE_TAG      = "latest"
 IMAGE_URI      = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com/{ECR_REPO}:{IMAGE_TAG}"
-SAGEMAKER_ROLE = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/SageMakerExecutionRole"
+SAGEMAKER_ROLE = f"arn:aws:iam::{AWS_ACCOUNT_ID}:role/Model_training"
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -932,12 +933,12 @@ ResNetFaceClassification/
 - [x] Final model saved to `--model-dir` (defaults to `/opt/ml/model`)
 
 ### AWS Infrastructure
-- [ ] `docker/requirements.txt` contains only `wandb>=0.17.0` (no scikit-learn)
-- [ ] `docker/Dockerfile` builds successfully from AWS DLC base (`763104351884.dkr.ecr...`)
-- [ ] `scripts/build_and_push_ecr.sh` authenticates to both DLC and own ECR, builds, and pushes
-- [ ] `scripts/upload_data_to_s3.sh` syncs train/ and val/ directories to S3
-- [ ] `scripts/launch_sagemaker_job.py` launches with `use_spot_instances=True`, unique `checkpoint_s3_uri`, `freeze-epochs=2`
-- [ ] `WANDB_API_KEY` never hardcoded — always sourced from local shell env var
+- [x] `docker/requirements.txt` contains only `wandb>=0.17.0` (no scikit-learn)
+- [x] `docker/Dockerfile` builds successfully from AWS DLC base (`763104351884.dkr.ecr...`)
+- [x] `scripts/build_and_push_ecr.sh` authenticates to both DLC and own ECR, builds, and pushes
+- [x] `scripts/upload_data_to_s3.sh` syncs train/ and val/ directories to S3
+- [x] `scripts/launch_sagemaker_job.py` launches with `use_spot_instances=True`, unique `checkpoint_s3_uri`, `freeze-epochs=2`
+- [x] `WANDB_API_KEY` never hardcoded — always sourced from local shell env var
 
 ### Experiments
 - [ ] Stage 1: configs A, B, C trained for 8 epochs (2 frozen + 6 fine-tuning) on 20% data
