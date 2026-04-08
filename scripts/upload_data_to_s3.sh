@@ -4,19 +4,23 @@
 #
 # Usage:
 #   ./scripts/upload_data_to_s3.sh                        # uses ./data and default SageMaker bucket
-#   ./scripts/upload_data_to_s3.sh data my-bucket-name   # explicit local dir + bucket
+#   ./scripts/upload_data_to_s3.sh data resnet-face-classification-839000214843   # explicit local dir + bucket
 set -euo pipefail
 
 LOCAL_DIR="${1:-data}"
 BUCKET="${2:-$(python3 -c 'import sagemaker; print(sagemaker.Session().default_bucket())')}"
-PREFIX="resnet-face/data"
+PREFIX="data"
 
-echo "Uploading ${LOCAL_DIR}/train → s3://${BUCKET}/${PREFIX}/train"
-aws s3 sync "${LOCAL_DIR}/train/" "s3://${BUCKET}/${PREFIX}/train/" --no-progress
+echo "Uploading ${LOCAL_DIR}/train-small → s3://${BUCKET}/${PREFIX}/train-small"
+aws s3 sync "${LOCAL_DIR}/train-small/" "s3://${BUCKET}/${PREFIX}/train-small/" --no-progress
 
-echo "Uploading ${LOCAL_DIR}/val → s3://${BUCKET}/${PREFIX}/val"
-aws s3 sync "${LOCAL_DIR}/val/" "s3://${BUCKET}/${PREFIX}/val/" --no-progress
+echo "Uploading ${LOCAL_DIR}/dev-small → s3://${BUCKET}/${PREFIX}/val-small"
+aws s3 sync "${LOCAL_DIR}/dev-small/" "s3://${BUCKET}/${PREFIX}/val-small/" --no-progress
+
+echo "Uploading ${LOCAL_DIR}/test → s3://${BUCKET}/${PREFIX}/test"
+aws s3 sync "${LOCAL_DIR}/test/" "s3://${BUCKET}/${PREFIX}/test/" --no-progress
 
 echo "Done. S3 URIs:"
-echo "  Train: s3://${BUCKET}/${PREFIX}/train"
-echo "  Val:   s3://${BUCKET}/${PREFIX}/val"
+echo "  Train: s3://${BUCKET}/${PREFIX}/train-small"
+echo "  Val:   s3://${BUCKET}/${PREFIX}/val-small"
+echo "  Test:  s3://${BUCKET}/${PREFIX}/test"
