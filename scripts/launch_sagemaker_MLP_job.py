@@ -10,15 +10,15 @@ WANDB_API_KEY must be set in the local environment.
 Usage (Stage 1 — elimination, 20% data):
     python scripts/launch_sagemaker_MLP_job.py \
         --head-config C --stage 1 --epochs 8 --use-spot \
-        --bucket resnet-face-classification-839000214843 --prefix data \
+        --bucket $AWS_BUCKET --prefix data \
 
 
 Usage (Stage 2 — full data, load Stage 1 checkpoint):
     python scripts/launch_sagemaker_MLP_job.py \
         --head-config B --stage 2 --epochs 25 --use-spot \
-        --bucket resnet-face-classification-839000214843 --prefix data \
+        --bucket $AWS_BUCKET --prefix data \
         --num-aug-copies 5 \
-        --baseline-ckpt-s3 s3://resnet-face-classification-839000214843/data/checkpoints/resnet-head-b-s1-1775585676/
+        --baseline-ckpt-s3 s3://$AWS_BUCKET/data/checkpoints/resnet-head-b-s1-1775585676/
 """
 
 import argparse
@@ -60,8 +60,8 @@ def parse_args():
                    help="Use spot instances (60-90%% cheaper, requires checkpoint_s3_uri)")
     p.add_argument("--baseline-ckpt-s3",  default=None,
                    help="S3 URI of Stage 1 head checkpoint dir (for Stage 2 resume)")
-    p.add_argument("--bucket",            required=True,
-                   help="S3 bucket name")
+    p.add_argument("--bucket",            default=os.environ.get("AWS_BUCKET"),
+                   help="S3 bucket name (default: $AWS_BUCKET env var)")
     p.add_argument("--prefix",            default="data",
                    help="S3 key prefix — features expected at {prefix}/features/")
     return p.parse_args()

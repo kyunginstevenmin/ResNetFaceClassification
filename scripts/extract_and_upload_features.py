@@ -17,7 +17,7 @@ Usage:
         --train-dir data/train \
         --val-dir data/val \
         --num-aug-copies 5 \
-        --bucket resnet-face-classification-839000214843 \
+        --bucket $AWS_BUCKET \
         --features-prefix data/features
 """
 

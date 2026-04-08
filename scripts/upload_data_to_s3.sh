@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ./scripts/upload_data_to_s3.sh                        # uses ./data and default SageMaker bucket
-#   ./scripts/upload_data_to_s3.sh data resnet-face-classification-839000214843   # explicit local dir + bucket
+#   ./scripts/upload_data_to_s3.sh data $AWS_BUCKET   # explicit local dir + bucket
 set -euo pipefail
 
 LOCAL_DIR="${1:-data}"

@@ -12,8 +12,8 @@ S3 output:
 
 Usage:
     python scripts/launch_sagemaker_extraction.py \
-        --bucket resnet-face-classification-839000214843 \
-        --checkpoint-s3 s3://resnet-face-classification-839000214843/checkpoints/checkpoint.pth
+        --bucket $AWS_BUCKET \
+        --checkpoint-s3 s3://$AWS_BUCKET/checkpoints/checkpoint.pth
 
 Optional:
     --num-aug-copies 5          (default: 5)
@@ -50,7 +50,8 @@ REPO_ROOT      = os.path.join(os.path.dirname(__file__), '..')
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--bucket',           required=True)
+    p.add_argument('--bucket',           default=os.environ.get('AWS_BUCKET'),
+                   help='S3 bucket name (default: $AWS_BUCKET env var)')
     p.add_argument('--checkpoint-s3',    required=True,
                    help='S3 URI of baseline checkpoint .pth')
     p.add_argument('--prefix',           default='data')

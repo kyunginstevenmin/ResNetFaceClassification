@@ -5,7 +5,7 @@ Use small dev set (data/dev-small) for quick evaluation. For full evaluation, us
 
 Usage:
     python scripts/evaluate_s3_model.py \
-        --model-s3 s3://resnet-face-classification-839000214843/resnet-face/output/resnet-face-20260404225850/output/model.tar.gz \
+        --model-s3 s3://$AWS_BUCKET/resnet-face/output/resnet-face-20260404225850/output/model.tar.gz \
         --val-dir data/dev-small \
         --head-config A
 """

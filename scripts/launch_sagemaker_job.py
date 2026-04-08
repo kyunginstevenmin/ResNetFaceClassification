@@ -8,15 +8,15 @@ the training container as an env var. Never hardcode it.
 Usage (Stage 1 — elimination, 20% data):
     python scripts/launch_sagemaker_job.py \
 --head-config A --stage 1 --epochs 8 --use-spot \
---bucket resnet-face-classification-839000214843 --prefix data \
---baseline-ckpt-s3 s3://resnet-face-classification-839000214843/checkpoints/
+--bucket $AWS_BUCKET --prefix data \
+--baseline-ckpt-s3 s3://$AWS_BUCKET/checkpoints/
 
 Usage (Stage 2 — selection, full data):
     python scripts/launch_sagemaker_job.py \
 --head-config B --stage 2 --epochs 25 \
 --instance-type ml.g4dn.xlarge --use-spot \
---bucket resnet-face-classification-839000214843 --prefix data \
---baseline-ckpt-s3 s3://resnet-face-classification-839000214843/data/checkpoints/resnet-head-b-s1-1775493039/
+--bucket $AWS_BUCKET --prefix data \
+--baseline-ckpt-s3 s3://$AWS_BUCKET/data/checkpoints/resnet-head-b-s1-1775493039/
 """
 
 import argparse

@@ -10,7 +10,7 @@ Creates:
 
 Usage:
     python scripts/create_ec2_instance_profile.py \
-        --bucket resnet-face-classification-839000214843
+        --bucket $AWS_BUCKET
 """
 
 import argparse
@@ -26,7 +26,8 @@ PROFILE_NAME = 'EC2FeatureExtraction'
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument('--bucket', required=True, help='S3 bucket the instance needs to access')
+    p.add_argument('--bucket', default=os.environ.get('AWS_BUCKET'),
+                   help='S3 bucket the instance needs to access (default: $AWS_BUCKET env var)')
     return p.parse_args()
 
 

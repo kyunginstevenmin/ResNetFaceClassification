@@ -17,9 +17,9 @@ Prerequisites:
 
 Usage:
     python scripts/launch_ec2_extraction.py \
-        --checkpoint-s3 s3://resnet-face-classification-839000214843/checkpoints/checkpoint.pth \
-        --instance-profile arn:aws:iam::839000214843:instance-profile/EC2FeatureExtraction\
-        --bucket resnet-face-classification-839000214843
+        --checkpoint-s3 s3://$AWS_BUCKET/checkpoints/checkpoint.pth \
+        --instance-profile arn:aws:iam::\$AWS_ACCOUNT_ID:instance-profile/EC2FeatureExtraction\
+        --bucket $AWS_BUCKET
 
 Optional:
     --num-aug-copies 5          (default: 5)
