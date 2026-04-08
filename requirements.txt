@@ -1,0 +1,22 @@
+# Local development dependencies
+# For the SageMaker ECR image, see docker/requirements.txt
+
+# ML
+torch>=2.0
+torchvision>=0.15
+
+# AWS
+boto3>=1.34
+sagemaker>=2.200
+
+# Experiment tracking
+wandb>=0.17
+
+# Notebooks
+jupyter
+matplotlib
+pandas
+numpy
+
+# Utilities
+python-dotenv
