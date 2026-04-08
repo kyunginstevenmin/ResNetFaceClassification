@@ -24,3 +24,6 @@ memory/
 
 # Editor
 *.code-workspace
+
+# Scratch / exploratory notebooks
+notebooks/scratch/
